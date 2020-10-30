@@ -1,6 +1,6 @@
 module Main where
 
-import Text.ParserCombinators.ReadP
+-- import Text.ParserCombinators.ReadP
 import Data.Char
 import Data.List
 import Data.Functor
@@ -23,50 +23,9 @@ data Expr
   deriving (Eq, Show)
 
 
-isVariable :: Char -> Bool
-isVariable c = isLetter c
-
--- todo: maybe this should be String -> bool?
-isConstant :: Char -> Bool
-isConstant c = isDigit c
-
--- todo: there should be whitespace after var
-varP :: ReadP Expr
-varP = do
-  a <- satisfy isVariable
-  return $ Var a
-
-constP :: ReadP Expr
-constP = do 
-  a <- many1 $ satisfy isConstant
-  return $ Const (read a)
-
-
--- mulP :: ReadP Expr
--- mulP = do
---   a <- 
-
-
--- operatorP :: ReadP Expr
--- operatorP = do
---   choice
---   [ mulP
---   ]
-
-
-readExprParser :: ReadP Expr
-readExprParser = do
-
-  a <- constP <|> varP
-  b <- constP <|> varP
-
-  return a
-
-
--- todo: finish this
-readExpr :: String -> Expr
-readExpr rawStr = fst $ last $ readP_to_S readExprParser str
-  where str = filter (/= ' ') rawStr
+isConst :: Expr -> Bool
+isConst (Const x) = True
+isConst x = False
 
 
 showWithOP :: [Expr] -> Char -> String
@@ -84,6 +43,18 @@ showPretty exp = s
              Const n -> show n
 
 
+
+count :: (a -> Bool) -> [a] -> Int
+count p xs = length $ filter p xs
+
+
+collectConstants :: (Float -> Float -> Float) -> Float -> [Expr] -> [Expr]
+collectConstants op acc xs = [Const (foldr f acc constants)] ++ notConst
+  where constants = filter isConst xs
+        notConst = filter (not . isConst) xs
+        f (Const a) acc = op acc a
+
+
 simplify :: Expr -> Expr
 simplify exp = simplify_ 0 exp
 
@@ -91,6 +62,26 @@ simplify_ :: Int -> Expr -> Expr
 simplify_ 10 exp = exp -- max simplify depth exceeded
 simplify_ d exp =
   case exp of
+    Mul (x:[]) -> x
+    Add (x:[]) -> x
+    Sub ((Const x):[]) -> (Const (-x))
+
+    -- multiplying by zero or one
+    Mul xs | elem (Const 0) xs -> Const 0
+    Mul xs | elem (Const 1) xs ->
+      simplify_ (d+1) $ Mul $ filter (/= Const 1) xs
+
+    -- collect constants in communative operators
+    Mul xs | count isConst xs >= 2 ->
+      simplify_ (d+1) $ Mul (collectConstants (*) 1 xs)
+
+    Add xs | count isConst xs >= 2 ->
+      simplify_ (d+1) $ Add (collectConstants (+) 0 xs)
+  
+    -- collect constants in non communative operators
+    Sub xs | count isConst xs >= 2 ->
+      simplify_ (d+1) $ Sub (collectConstants (-) 0 xs)
+
 
 
     -- base case, no simplify possible
@@ -98,11 +89,7 @@ simplify_ d exp =
 
 
 main :: IO ()
-main = do
-  l <- getLine
-  putStrLn $ "Parsed: " ++ showPretty (readExpr l)
-  putStrLn $ "Simplified: " ++ showPretty (simplify (readExpr l))
-  main
+main = test
 
 
 test :: IO ()
@@ -116,25 +103,47 @@ test = hspec $ do
     it "simplifies 0*x" $ do
       simplify (Mul [Const 0, Var 'x']) `shouldBe` (Const 0)
 
-    it "evaluates constants" $ do
+    it "simplifies 1*x*1" $ do
+      simplify (Mul [Const 1, Var 'x', Const 1]) `shouldBe` (Var 'x')
+
+    it "does nothing to x + 1" $ do
+      simplify (Add [Var 'x', Const 1]) `shouldBe` (Add [Var 'x', Const 1])
+
+    it "evaluates mul" $ do
       simplify (Mul [(Const 2), (Const 4)]) `shouldBe` (Const 8)
+
+    it "evaluates add" $ do
       simplify (Add [(Const 2), (Const 4)]) `shouldBe` (Const 6)
+
+    it "evaluates sub" $ do
       simplify (Sub [(Const 2), (Const 4)]) `shouldBe` (Const (-2))
+
+    it "evaluates div" $ do
       simplify (Div [(Const 2), (Const 4)]) `shouldBe` (Const 0.5)
+
+    it "evaluates exp" $ do
       simplify (Exp [(Const 2), (Const 4)]) `shouldBe` (Const 16)
 
-    it "evaluates constants nested" $ do
+    it "evaluates constants nested (mul)" $ do
       simplify (Mul [(Const 2), (Const 2), (Const 4)]) `shouldBe` (Const 16)
-      simplify (Add [(Const 2), (Const 2), (Const 4)]) `shouldBe` (Const 8)
-      simplify (Sub [(Const 2), (Const 2), (Const 4)]) `shouldBe` (Const 4)
-      simplify (Div [(Const 2), (Const 2), (Const 4)]) `shouldBe` (Const 4)
-      simplify (Exp [(Const 2), (Const 2), (Const 4)]) `shouldBe` (Const (2^16))
 
-    it "simplifies (2*x)*4 = 8x" $ do
-      simplify
-        (Mul [(Const 2), (Var 'x'), (Const 4)])
-        `shouldBe`
-        (Mul [(Const 8), (Var 'x')])
+    it "evaluates constants nested (add)" $ do
+      simplify (Add [(Const 2), (Const 2), (Const 4)]) `shouldBe` (Const 8)
+
+    it "evaluates constants nested (sub)" $ do
+      simplify (Sub [(Const 2), (Const 2), (Const 4)]) `shouldBe` (Const (-4))
+
+    it "evaluates constants nested (div)" $ do
+      simplify (Div [(Const 2), (Const 2), (Const 4)]) `shouldBe` (Const (1/4))
+
+    -- it "evaluates constants nested (exp)" $ do
+    --   simplify (Exp [(Const 2), (Const 2), (Const 4)]) `shouldBe` (Const 256)
+
+    -- it "simplifies (2*x)*4 = 8x" $ do
+    --   simplify
+    --     (Mul [(Const 2), (Var 'x'), (Const 4)])
+    --     `shouldBe`
+    --     (Mul [(Const 8), (Var 'x')])
 
 
 
@@ -152,31 +161,4 @@ test = hspec $ do
     --     (Add (Var 'x') ((Add (Var 'x') (Add (Var 'x') (Var 'x')))))
     --     `shouldBe`
     --     (Mul (Var 'x') (Const 4))
-
-
-  -- describe "readExpr" $ do
-  --   it "reads constants" $ do
-  --     readExpr "42" `shouldBe` Const 42
-  --     readExpr "10" `shouldBe` Const 10
-
-  --   it "reads variables" $ do
-  --     readExpr "x" `shouldBe` Var 'x'
-  --     readExpr "y" `shouldBe` Var 'y'
-
-  --   -- NOTE: this is not scalable! I need to write code to gen
-  --   -- tests otherwise I'm screwed.
-  --   it "reads addition" $ do
-  --     readExpr "x+y" `shouldBe` Add (Var 'x') (Var 'y')
-  --     readExpr "x+5" `shouldBe` Add (Var 'x') (Const 5)
-  --     readExpr "5+x" `shouldBe` Add (Const 5) (Var 'x')
-
-  --   it "reads addition with whitespace" $ do
-  --     readExpr " x + y" `shouldBe` Add (Var 'x') (Var 'y')
-  --     readExpr " x + 5 " `shouldBe` Add (Var 'x') (Const 5)
-  --     readExpr "5 + x " `shouldBe` Add (Const 5) (Var 'x')
-
-  --   it "reads subtraction" $ do
-  --     readExpr "x-y" `shouldBe` Sub (Var 'x') (Var 'y')
-  --     readExpr "x-5" `shouldBe` Sub (Var 'x') (Const 5)
-  --     readExpr "5-x" `shouldBe` Sub (Const 5) (Var 'x')
 
