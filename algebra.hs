@@ -2,6 +2,7 @@ module Main where
 
 import Text.ParserCombinators.ReadP
 import Data.Char
+import Data.List
 import Data.Functor
 import Control.Applicative ((<|>), Applicative, Alternative)
 
@@ -9,14 +10,16 @@ import Test.Hspec
 import Test.QuickCheck
 
 
+-- lispy like because otherwise the communative prop will
+-- drive me crazy (it still might)
 data Expr
   = Const Float
   | Var Char
-  | Mul Expr Expr
-  | Add Expr Expr
-  | Sub Expr Expr
-  | Div Expr Expr
-  | Exp Expr Expr
+  | Mul [Expr] -- x[0] * x[1] * x[2]   ...
+  | Add [Expr] -- x[0] + x[1] + x[2]   ...
+  | Sub [Expr] -- x[0] - x[1] - x[2]   ...
+  | Div [Expr] -- x[0]/(x[1]/x[2])     ...
+  | Exp [Expr] -- x[0]^((x[1])^(x[2])) ...
   deriving (Eq, Show)
 
 
@@ -64,42 +67,22 @@ readExprParser = do
 readExpr :: String -> Expr
 readExpr rawStr = fst $ last $ readP_to_S readExprParser str
   where str = filter (/= ' ') rawStr
+
+
+showWithOP :: [Expr] -> Char -> String
+showWithOP exp c = [c] ++ (intercalate " " $ map showPretty exp)
  
 showPretty :: Expr -> String
 showPretty exp = s
   where s = case exp of
-             Mul e1 e2 -> "(" ++ show e1 ++ " * " ++ show e2 ++ ")"
-             Add e1 e2 -> "(" ++ show e1 ++ " + " ++ show e2 ++ ")"
-             Sub e1 e2 -> "(" ++ show e1 ++ " - " ++ show e2 ++ ")"
-             Div e1 e2 -> "(" ++ show e1 ++ " / " ++ show e2 ++ ")"
-             Exp e1 e2 -> "(" ++ show e1 ++  "^"  ++ show e2 ++ ")"
+             Mul xs -> "(" ++ (showWithOP xs '*') ++ ")"
+             Add xs -> "(" ++ (showWithOP xs '+') ++ ")"
+             Sub xs -> "(" ++ (showWithOP xs '-') ++ ")"
+             Div xs -> "(" ++ (showWithOP xs '/') ++ ")"
+             Exp xs -> "(" ++ (showWithOP xs '^') ++ ")"
              Var c -> [c]
              Const n -> show n
 
-
-
--- make an expr commutative, following rules
--- 1. Variable always after Expr in Add/Sub
--- 2. Constants always before Expr in Add/Sub
-makeComm :: Expr -> Expr
-makeComm exp =
-  case exp of
-    -- vars comes last
-    Mul (Var x) e -> Mul (makeComm e) (Var x)
-    Add (Var x) e -> Add (makeComm e) (Var x)
-
-    -- const comes first
-    Mul e (Const x) -> Mul (Const x) (makeComm e)
-    Add e (Const x) -> Add (Const x) (makeComm e)
-
-    -- recurse on operators
-    Mul a b -> Mul (makeComm a) (makeComm b)
-    Add a b -> Add (makeComm a) (makeComm b)
-    Sub a b -> Sub (makeComm a) (makeComm b)
-    Div a b -> Div (makeComm a) (makeComm b)
-    Exp a b -> Exp (makeComm a) (makeComm b)
-
-    _ -> exp
 
 simplify :: Expr -> Expr
 simplify exp = simplify_ 0 exp
@@ -107,34 +90,8 @@ simplify exp = simplify_ 0 exp
 simplify_ :: Int -> Expr -> Expr
 simplify_ 10 exp = exp -- max simplify depth exceeded
 simplify_ d exp =
-  case (makeComm exp) of
-    Mul (Const 0) (Var c) -> Const 0 -- 0*x = 0
-    Mul (Var c) (Const 0) -> Const 0 -- x*0 = 0
-    Mul (Const 1) (Var c) -> Var c   -- 1*x = x
-    Mul (Var c) (Const 1) -> Var c   -- x*1 = x
+  case exp of
 
-    -- thread constants downwards
-    Mul (Const c1) (Mul (Const c2) e) ->
-      simplify_ (d+1) (Mul (Const (c1*c2)) (simplify_ (d+1) e))
-
-    Add (Const c1) (Add (Const c2) e) ->
-      simplify_ (d+1) (Add (Const (c1+c2)) (simplify_ (d+1) e))
-
-
-    -- Evaluate constants
-    Mul (Const a) (Const b) -> Const (a*b)
-    Add (Const a) (Const b) -> Const (a+b)
-    Sub (Const a) (Const b) -> Const (a-b)
-    Div (Const a) (Const b) -> Const (a/b)
-    Exp (Const a) (Const b) -> Const (a**b)
-
-
-    -- Recurse on operators
-    Mul a b -> simplify_ (d+1) $ Mul (simplify_ (d+1) a) (simplify_ (d+1) b)
-    Div a b -> simplify_ (d+1) $ Div (simplify_ (d+1) a) (simplify_ (d+1) b)
-    Sub a b -> simplify_ (d+1) $ Sub (simplify_ (d+1) a) (simplify_ (d+1) b)
-    Add a b -> simplify_ (d+1) $ Add (simplify_ (d+1) a) (simplify_ (d+1) b)
-    Exp a b -> simplify_ (d+1) $ Exp (simplify_ (d+1) a) (simplify_ (d+1) b)
 
     -- base case, no simplify possible
     _ -> exp
@@ -150,48 +107,34 @@ main = do
 
 test :: IO ()
 test = hspec $ do
-  describe "makeComm" $ do
-    it "puts const first mult" $ do
-      makeComm (Mul (Var 'x') (Const 1)) `shouldBe` (Mul (Const 1) (Var 'x'))
-
-    it "puts const first add" $ do
-      makeComm (Add (Var 'x') (Const 1)) `shouldBe` (Add (Const 1) (Var 'x'))
-
-
   -- todo: automatically make multiplication and addition tests
   -- communative
   describe "simplify" $ do
     it "simplifies x*0" $ do
-      simplify (Mul (Var 'x') (Const 0)) `shouldBe` (Const 0)
+      simplify (Mul [Var 'x', Const 0]) `shouldBe` (Const 0)
 
     it "simplifies 0*x" $ do
-      simplify (Mul (Const 0) (Var 'x')) `shouldBe` (Const 0)
+      simplify (Mul [Const 0, Var 'x']) `shouldBe` (Const 0)
 
     it "evaluates constants" $ do
-      simplify (Mul (Const 2) (Const 4)) `shouldBe` (Const 8)
-      simplify (Add (Const 2) (Const 4)) `shouldBe` (Const 6)
-      simplify (Sub (Const 2) (Const 4)) `shouldBe` (Const (-2))
-      simplify (Div (Const 2) (Const 4)) `shouldBe` (Const 0.5)
-      simplify (Exp (Const 2) (Const 4)) `shouldBe` (Const 16)
+      simplify (Mul [(Const 2), (Const 4)]) `shouldBe` (Const 8)
+      simplify (Add [(Const 2), (Const 4)]) `shouldBe` (Const 6)
+      simplify (Sub [(Const 2), (Const 4)]) `shouldBe` (Const (-2))
+      simplify (Div [(Const 2), (Const 4)]) `shouldBe` (Const 0.5)
+      simplify (Exp [(Const 2), (Const 4)]) `shouldBe` (Const 16)
 
     it "evaluates constants nested" $ do
-      simplify (Mul (Const 2) (Mul (Const 2) (Const 4))) `shouldBe` (Const 16)
-      simplify (Add (Const 2) (Add (Const 2) (Const 4))) `shouldBe` (Const 8)
-      simplify (Sub (Const 2) (Sub (Const 2) (Const 4))) `shouldBe` (Const 4)
-      simplify (Div (Const 2) (Div (Const 2) (Const 4))) `shouldBe` (Const 4)
-      simplify (Exp (Const 2) (Exp (Const 2) (Const 4))) `shouldBe` (Const (2^16))
+      simplify (Mul [(Const 2), (Const 2), (Const 4)]) `shouldBe` (Const 16)
+      simplify (Add [(Const 2), (Const 2), (Const 4)]) `shouldBe` (Const 8)
+      simplify (Sub [(Const 2), (Const 2), (Const 4)]) `shouldBe` (Const 4)
+      simplify (Div [(Const 2), (Const 2), (Const 4)]) `shouldBe` (Const 4)
+      simplify (Exp [(Const 2), (Const 2), (Const 4)]) `shouldBe` (Const (2^16))
 
     it "simplifies (2*x)*4 = 8x" $ do
       simplify
-        (Mul (Const 2) (Mul (Var 'x') (Const 4)))
+        (Mul [(Const 2), (Var 'x'), (Const 4)])
         `shouldBe`
-        (Mul (Const 8) (Var 'x'))
-
-    it "simplifies (2*x)*(x*4) = 8x" $ do
-      simplify
-        (Mul (Mul (Const 2) (Var 'x')) (Mul (Var 'x') (Const 4)))
-        `shouldBe`
-        (Mul (Const 8) (Var 'x'))
+        (Mul [(Const 8), (Var 'x')])
 
 
 
