@@ -43,7 +43,7 @@ def sin(x, acc=0.001):
         # v can be considered error of previous term, (by alternating series)
         # check v != 0 since if c=0 then sin(0)=0 (but this is not error)
         if v != 0 and abs(v) < acc:
-            print(f'break, degree {d} v={v}')
+            # print(f'break, degree {d} v={v}')
             break
 
         d += 1
@@ -54,6 +54,9 @@ def cos(x):
     return sin(x + pi/2)
 
 
+def bsin(x, deg=10):
+    return sum((-1)**n * x**(2*n + 1)/f(2*n + 1) for n in range(deg))
+
 
 tests = [
     (1, 0.001),
@@ -63,6 +66,7 @@ tests = [
 for t in tests:
     n, acc = t
     v = sin(n, acc=acc)
-    err = abs(v - math.sin(n))
-    print(f'sin({n}) = {r(v)} err = {err}')
+    bv = bsin(n)
+    print(f'sin({n}) = {r(v)} err = {abs(v - math.sin(n))}')
+    print(f'bsin({n}) = {r(bv)} err = {abs(bv - math.sin(n))}')
     print('-'*50)
